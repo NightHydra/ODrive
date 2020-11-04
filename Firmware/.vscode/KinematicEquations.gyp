@@ -25,9 +25,12 @@ class KEquations:
         part9 = 2*L3*math.sin(theta3)*(H-y0)
 
         return part1+part2+part3+part4+part5-part6-part7-part8+part9
+
+    def theta1(self, C2, C3, C1):
+        return 
     
 
-    
+
     
 
     

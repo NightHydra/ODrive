@@ -1,0 +1,2 @@
+This is addition of another document to test out github.
+The document itself has no purpose.

@@ -169,9 +169,6 @@ bool Axis::do_checks() {
     // Sub-components should use set_error which will propegate to this error_
     motor_.effective_current_lim();
     motor_.do_checks();
-    // encoder_.do_checks();
-    // sensorless_estimator_.do_checks();
-    // controller_.do_checks();
 
     // Check for endstop presses
     if (min_endstop_.config_.enabled && min_endstop_.rose() && !(current_state_ == AXIS_STATE_HOMING)) {
@@ -186,12 +183,29 @@ bool Axis::do_checks() {
 // @brief Update all esitmators
 bool Axis::do_updates() {
     // Sub-components should use set_error which will propegate to this error_
+
+
+    task_times_.encoder_update.beginTimer();
     encoder_.update();
+    task_times_.encoder_update.stopTimer();
+
+    task_times_.sensorless_update.beginTimer();
     sensorless_estimator_.update();
+    task_times_.sensorless_update.stopTimer();
+
+    task_times_.thermistor_update.beginTimer();
     motor_.fet_thermistor_.update();
     motor_.motor_thermistor_.update();
+    task_times_.thermistor_update.stopTimer();
+
+    task_times_.min_endstop_update.beginTimer();
     min_endstop_.update();
+    task_times_.min_endstop_update.stopTimer();
+
+    task_times_.max_endstop_update.beginTimer();
     max_endstop_.update();
+    task_times_.max_endstop_update.stopTimer();
+
     bool ret = check_for_errors();
     odCAN->send_cyclic(*this);
     return ret;
@@ -331,13 +345,18 @@ bool Axis::run_closed_loop_control_loop() {
     set_step_dir_active(config_.enable_step_dir);
     run_control_loop([this](){
         // Note that all estimators are updated in the loop prefix in run_control_loop
+        
+        task_times_.controller_update.beginTimer();
         float torque_setpoint;
         if (!controller_.update(&torque_setpoint))
             return error_ |= ERROR_CONTROLLER_FAILED, false;
+        task_times_.controller_update.stopTimer();
 
+        task_times_.motor_update.beginTimer();
         float phase_vel = (2*M_PI) * encoder_.vel_estimate_ * motor_.config_.pole_pairs;
         if (!motor_.update(torque_setpoint, encoder_.phase_, phase_vel))
             return false; // set_error should update axis.error_
+        task_times_.motor_update.stopTimer();
 
         return true;
     });

@@ -78,9 +78,13 @@ bool Motor::apply_config() {
 // @brief Set up the gate drivers
 bool Motor::setup() {
     if (!gate_driver_.init()) {
+        set_error(ERROR_DRV_FAULT);
         return false;
     }
     
+    fet_thermistor_.update();
+    motor_thermistor_.update();
+
     // Solve for exact gain, then snap down to have equal or larger range as requested
     // or largest possible range otherwise
     constexpr float kMargin = 0.90f;
@@ -274,10 +278,10 @@ bool Motor::run_calibration() {
 }
 
 bool Motor::enqueue_modulation_timings(float mod_alpha, float mod_beta) {
-    if (std::isnan(mod_alpha) || std::isnan(mod_alpha))
+    if (is_nan(mod_alpha) || is_nan(mod_beta))
         return set_error(ERROR_MODULATION_IS_NAN), false;
-    float tA, tB, tC;
-    if (SVM(mod_alpha, mod_beta, &tA, &tB, &tC) != 0)
+    auto [tA, tB, tC, success] = SVM(mod_alpha, mod_beta);
+    if(!success)
         return set_error(ERROR_MODULATION_MAGNITUDE), false;
     next_timings_[0] = (uint16_t)(tA * (float)TIM_1_8_PERIOD_CLOCKS);
     next_timings_[1] = (uint16_t)(tB * (float)TIM_1_8_PERIOD_CLOCKS);
@@ -306,6 +310,7 @@ bool Motor::FOC_voltage(float v_d, float v_q, float pwm_phase) {
 }
 
 bool Motor::FOC_current(float Id_des, float Iq_des, float I_phase, float pwm_phase, float phase_vel) {
+    axis_->task_times_.FOC_Current.beginTimer();
     // Syntactic sugar
     CurrentControl_t& ictrl = current_control_;
 
@@ -363,7 +368,7 @@ bool Motor::FOC_current(float Id_des, float Iq_des, float I_phase, float pwm_pha
 
     // Vector modulation saturation, lock integrator if saturated
     // TODO make maximum modulation configurable
-    float mod_scalefactor = 0.80f * sqrt3_by_2 * 1.0f / sqrtf(mod_d * mod_d + mod_q * mod_q);
+    float mod_scalefactor = 0.80f * sqrt3_by_2 * 1.0f / std::sqrt(mod_d * mod_d + mod_q * mod_q);
     if (mod_scalefactor < 1.0f) {
         mod_d *= mod_scalefactor;
         mod_q *= mod_scalefactor;
@@ -418,6 +423,7 @@ bool Motor::FOC_current(float Id_des, float Iq_des, float I_phase, float pwm_pha
         }
     }
 
+    axis_->task_times_.FOC_Current.stopTimer();
     return true;
 }
 
@@ -430,7 +436,7 @@ bool Motor::update(float torque_setpoint, float phase, float phase_vel) {
     phase_vel *= config_.direction;
 
     if (config_.motor_type == MOTOR_TYPE_ACIM) {
-        current_setpoint = torque_setpoint / (config_.torque_constant * fmax(current_control_.acim_rotor_flux, config_.acim_gain_min_flux));
+        current_setpoint = torque_setpoint / (config_.torque_constant * std::max(current_control_.acim_rotor_flux, config_.acim_gain_min_flux));
     }
     else {
         current_setpoint = torque_setpoint / config_.torque_constant;
@@ -448,7 +454,7 @@ bool Motor::update(float torque_setpoint, float phase, float phase_vel) {
         // So we elect to write it as if the effect is immediate, to have cleaner code
 
         if (config_.acim_autoflux_enable) {
-            float abs_iq = fabsf(iq);
+            float abs_iq = std::abs(iq);
             float gain = abs_iq > id ? config_.acim_autoflux_attack_gain : config_.acim_autoflux_decay_gain;
             id += gain * (abs_iq - id) * current_meas_period;
             id = std::clamp(id, config_.acim_autoflux_min_Id, ilim);
@@ -459,9 +465,8 @@ bool Motor::update(float torque_setpoint, float phase, float phase_vel) {
         float dflux_by_dt = config_.acim_slip_velocity * (id - current_control_.acim_rotor_flux);
         current_control_.acim_rotor_flux += dflux_by_dt * current_meas_period;
         float slip_velocity = config_.acim_slip_velocity * (iq / current_control_.acim_rotor_flux);
-        // Check for issues with small denominator. Polarity of check to catch NaN too
-        bool acceptable_vel = fabsf(slip_velocity) <= 0.1f * (float)current_meas_hz;
-        if (!acceptable_vel)
+        // Check for issues with small denominator.
+        if (is_nan(slip_velocity) || std::abs(slip_velocity) > 0.1f * (float)current_meas_hz)
             slip_velocity = 0.0f;
         phase_vel += slip_velocity;
         // reporting only:

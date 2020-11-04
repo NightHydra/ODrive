@@ -1,1 +1,5 @@
+<<<<<<< HEAD
 Test file to try out github
+=======
+test to see if this works
+>>>>>>> 34eded907da7afc1e26f8a1c1cbad86df84afcef
